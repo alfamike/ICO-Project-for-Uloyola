@@ -59,15 +59,10 @@ contract MyToken is Initializable, ERC20Upgradeable, ERC20PermitUpgradeable {
     function fundRetrival (address destination) public virtual {
         require(msg.sender != _owner,"The contract owner can not retrive the charity fund");
         require(msg.sender == _fundRetriver || msg.sender == _fundDelegatedRetriver , "The charity fund can only be retrieved by the authorized person or the delegated person");
-        
-        if (msg.sender == _fundRetriver) {
-            _transfer(address(this), destination, address(this).balance);
-        }
+       
+        _transfer(address(this), destination, address(this).balance);
+    
 
-        if (msg.sender == _fundDelegatedRetriver) {
-            _transfer(address(this), destination, address(this).balance);
-        }
-        
     }
 
     function setDelegatedRetriever (address newDelegatedRetriver) public virtual {
