@@ -4,113 +4,92 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/structs/EnumerableSetUpgradeable.sol";
 
-contract MyToken is Initializable, ERC20Upgradeable, ERC20PermitUpgradeable {
-    address private _owner;
-    address[] private _authorizedAgents;
-    address[] private _npoAddresses;
-    address[] private _supermarketsAddresses;
+contract MyToken is Initializable, ERC20Upgradeable, ERC20PermitUpgradeable, OwnableUpgradeable, ReentrancyGuardUpgradeable {
+    using EnumerableSetUpgradeable for EnumerableSetUpgradeable.AddressSet;
+
+    // Agents from the contract owner company
+    EnumerableSetUpgradeable.AddressSet private _authorizedAgents;
+    // NPO Addresses
+    EnumerableSetUpgradeable.AddressSet private _npoAddresses;
+    // Supermarkets addresses
+    EnumerableSetUpgradeable.AddressSet private _supermarketsAddresses;
+    // Balance of tokens received from supermarkets
     mapping(address => uint256) private _balancesSupermarkets;
+    // Balance of tokens sent to NPOs
     mapping(address => uint256) private _balancesNPOs;
 
-    constructor() {
-        initialize();
-        _disableInitializers();
-    }
-
-    modifier onlyOwner() {
-        require(_owner == _msgSender(), "Not authorized");
-        _;
+    function initialize() initializer external {
+        __ERC20_init("MyToken", "MTK");
+        __ERC20Permit_init("MyToken");
+        __Ownable_init(msg.sender); // Initialize owner with the deployer address
+        __ReentrancyGuard_init(); // Reentrancy Guard
+        _authorizedAgents.add(msg.sender); // Add owner as first authorized agent
+        _mint(msg.sender, 1000000000 * 10 ** decimals());
     }
 
     modifier onlyAuthorizedAgents() {
-        require(isAuthorized(msg.sender), "Caller is not authorized");
+        require(_authorizedAgents.contains(msg.sender), "Caller is not authorized");
         _;
     }
 
     modifier onlySupermarket() {
-        require(isSupermarket(msg.sender), "Caller is not a registered supermarket");
+        require(_supermarketsAddresses.contains(msg.sender), "Caller is not a registered supermarket");
         _;
-    }
-
-    function isAuthorized(address agent) internal view returns (bool) {
-        for (uint256 i = 0; i < _authorizedAgents.length; i++) {
-            if (_authorizedAgents[i] == agent) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    function isSupermarket(address supermarket) internal view returns (bool) {
-        for (uint256 i = 0; i < _supermarketsAddresses.length; i++) {
-            if (_supermarketsAddresses[i] == supermarket) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    function initialize() initializer public {
-        __ERC20_init("MyToken", "MTK");
-        __ERC20Permit_init("MyToken");
-        _owner = msg.sender;
-        _authorizedAgents.push(msg.sender);
-        _mint(msg.sender, 1000000000 * 10 ** decimals());
     }
 
     function decimals() public pure override returns (uint8) {
         return 2;
     }
 
-    function deposit() payable external onlySupermarket {
-        _balancesSupermarkets[msg.sender] += msg.value;
+    function receiveDeposit(uint256 amount) external onlySupermarket nonReentrant {
+        _transfer(msg.sender, address(this), amount);
+        _balancesSupermarkets[msg.sender] += amount;
     }
 
-    function transferToNPO(address npo, uint256 value) public onlyAuthorizedAgents returns (bool) {
+    function transferToNPO(address npo, uint256 value) public onlyAuthorizedAgents nonReentrant returns (bool) {
         _transfer(address(this), npo, value);
         _balancesNPOs[npo] += value;
         return true;
     }
 
     function addAuthorizedAgents(address newAuthorized) public onlyOwner {
-        require(!_addressExists(newAuthorized, _authorizedAgents), "Address is already authorized");
-        _authorizedAgents.push(newAuthorized);
+        require(_authorizedAgents.add(newAuthorized), "Address is already authorized");
     }
 
     function removeAuthorizedAgents(address oldAuthorized) public onlyOwner {
-        _removeAddress(oldAuthorized, _authorizedAgents);
+        require(_authorizedAgents.remove(oldAuthorized), "Address not found");
     }
 
     function addNPO(address npo, uint256 initialBalance) public onlyAuthorizedAgents {
-        require(!_addressExists(npo, _npoAddresses), "NPO already exists");
+        require(_npoAddresses.add(npo), "NPO already exists");
         _balancesNPOs[npo] = initialBalance;
-        _npoAddresses.push(npo);
     }
 
     function removeNPO(address npo) public onlyAuthorizedAgents {
-        require(_balancesNPOs[npo] != 0 || _addressExists(npo, _npoAddresses), "NPO does not exist");
+        require(_npoAddresses.remove(npo), "NPO does not exist");
         delete _balancesNPOs[npo];
-        _removeAddress(npo, _npoAddresses);
     }
 
     function addSupermarket(address supermarket) public onlyAuthorizedAgents {
-        require(!_addressExists(supermarket, _supermarketsAddresses), "Supermarket already exists");
-        _supermarketsAddresses.push(supermarket);
+        require(_supermarketsAddresses.add(supermarket), "Supermarket already exists");
     }
 
     function removeSupermarket(address supermarket) public onlyAuthorizedAgents {
-        _removeAddress(supermarket, _supermarketsAddresses);
+        require(_supermarketsAddresses.remove(supermarket), "Supermarket not found");
         delete _balancesSupermarkets[supermarket];
     }
 
     function getNPOBalances() view public onlyAuthorizedAgents returns (address[] memory, uint256[] memory) {
-        uint256 length = _npoAddresses.length;
+        uint256 length = _npoAddresses.length();
         address[] memory addresses = new address[](length);
         uint256[] memory balances = new uint256[](length);
 
         for (uint256 i = 0; i < length; i++) {
-            addresses[i] = _npoAddresses[i];
+            addresses[i] = _npoAddresses.at(i);
             balances[i] = _balancesNPOs[addresses[i]];
         }
 
@@ -118,34 +97,15 @@ contract MyToken is Initializable, ERC20Upgradeable, ERC20PermitUpgradeable {
     }
 
     function getSupermarketBalances() view public onlyAuthorizedAgents returns (address[] memory, uint256[] memory) {
-        uint256 length = _supermarketsAddresses.length;
+        uint256 length = _supermarketsAddresses.length();
         address[] memory addresses = new address[](length);
         uint256[] memory balances = new uint256[](length);
 
         for (uint256 i = 0; i < length; i++) {
-            addresses[i] = _supermarketsAddresses[i];
+            addresses[i] = _supermarketsAddresses.at(i);
             balances[i] = _balancesSupermarkets[addresses[i]];
         }
 
         return (addresses, balances);
-    }
-
-    function _addressExists(address addr, address[] storage addrList) internal view returns (bool) {
-        for (uint256 i = 0; i < addrList.length; i++) {
-            if (addrList[i] == addr) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    function _removeAddress(address addr, address[] storage addrList) internal {
-        for (uint256 i = 0; i < addrList.length; i++) {
-            if (addrList[i] == addr) {
-                addrList[i] = addrList[addrList.length - 1];
-                addrList.pop();
-                break;
-            }
-        }
     }
 }
