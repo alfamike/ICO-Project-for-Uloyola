@@ -14,6 +14,7 @@ contract MyToken is Initializable, ERC20Upgradeable, ERC20PermitUpgradeable {
     mapping(address => uint256) private _balancesNPOs;
 
     constructor() {
+        initialize();
         _disableInitializers();
     }
 
