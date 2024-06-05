@@ -6,18 +6,14 @@ import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUp
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 contract MyToken is Initializable, ERC20Upgradeable, ERC20PermitUpgradeable {
-    // Address for the contract owner
     address private _owner;
-    // Fee percentage for charity fund
-    uint8 public fee;
-    // Address for authorized fund retriever
-    address private _fundRetriver;
-    //Address for delegated fund retriever
-    address private _fundDelegatedRetriver;
+    address[] private _authorizedAgents;
+    address[] private _npoAddresses;
+    address[] private _supermarketsAddresses;
+    mapping(address => uint256) private _balancesSupermarkets;
+    mapping(address => uint256) private _balancesNPOs;
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
-        initialize();
         _disableInitializers();
     }
 
@@ -26,54 +22,129 @@ contract MyToken is Initializable, ERC20Upgradeable, ERC20PermitUpgradeable {
         _;
     }
 
+    modifier onlyAuthorizedAgents() {
+        require(isAuthorized(msg.sender), "Caller is not authorized");
+        _;
+    }
+
+    modifier onlySupermarket() {
+        require(isSupermarket(msg.sender), "Caller is not a registered supermarket");
+        _;
+    }
+
+    function isAuthorized(address agent) internal view returns (bool) {
+        for (uint256 i = 0; i < _authorizedAgents.length; i++) {
+            if (_authorizedAgents[i] == agent) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function isSupermarket(address supermarket) internal view returns (bool) {
+        for (uint256 i = 0; i < _supermarketsAddresses.length; i++) {
+            if (_supermarketsAddresses[i] == supermarket) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     function initialize() initializer public {
         __ERC20_init("MyToken", "MTK");
         __ERC20Permit_init("MyToken");
         _owner = msg.sender;
+        _authorizedAgents.push(msg.sender);
         _mint(msg.sender, 1000000000 * 10 ** decimals());
-        fee = 5;
     }
 
-    function setFee (uint8 newFee) public onlyOwner {
-        fee = newFee;
+    function decimals() public pure override returns (uint8) {
+        return 2;
     }
 
-    function transfer(address to, uint256 value) public virtual override returns (bool) {
-        address owner = _msgSender();
+    function deposit() payable external onlySupermarket {
+        _balancesSupermarkets[msg.sender] += msg.value;
+    }
 
-        // Value minus fee
-        uint256 newValue = value - (value*fee/100);
-
-        // Transfer with fee applied
-        _transfer(owner, to, newValue);
-
-        // Calculate the fee
-        uint256 fee_aux = value*fee/100;
-
-        // Transfer to the fund
-        _transfer(owner, address(this), fee_aux);
-
+    function transferToNPO(address npo, uint256 value) public onlyAuthorizedAgents returns (bool) {
+        _transfer(address(this), npo, value);
+        _balancesNPOs[npo] += value;
         return true;
     }
 
-    function fundRetrival (address destination) public virtual {
-        require(msg.sender != _owner,"The contract owner can not retrive the charity fund");
-        require(msg.sender == _fundRetriver || msg.sender == _fundDelegatedRetriver , "The charity fund can only be retrieved by the authorized person or the delegated person");
-       
-        _transfer(address(this), destination, address(this).balance);
-    
-
+    function addAuthorizedAgents(address newAuthorized) public onlyOwner {
+        require(!_addressExists(newAuthorized, _authorizedAgents), "Address is already authorized");
+        _authorizedAgents.push(newAuthorized);
     }
 
-    function setDelegatedRetriever (address newDelegatedRetriver) public virtual {
-        require(msg.sender == _fundRetriver, "Only the fund retriver can change the delegated fund retrever");
-        require(msg.sender != _owner, "The delegated fund authorized person can not be the contract owner");
-        _fundDelegatedRetriver = newDelegatedRetriver;
+    function removeAuthorizedAgents(address oldAuthorized) public onlyOwner {
+        _removeAddress(oldAuthorized, _authorizedAgents);
     }
 
-    function setFundRetriever (address newRetriver) public virtual {
-        require(msg.sender != _owner, "Only the contract owner can change the fund retriver");
-        require(msg.sender != newRetriver, "The fund authorized person can not be the contract owner");
-        _fundRetriver = newRetriver;
+    function addNPO(address npo, uint256 initialBalance) public onlyAuthorizedAgents {
+        require(!_addressExists(npo, _npoAddresses), "NPO already exists");
+        _balancesNPOs[npo] = initialBalance;
+        _npoAddresses.push(npo);
+    }
+
+    function removeNPO(address npo) public onlyAuthorizedAgents {
+        require(_balancesNPOs[npo] != 0 || _addressExists(npo, _npoAddresses), "NPO does not exist");
+        delete _balancesNPOs[npo];
+        _removeAddress(npo, _npoAddresses);
+    }
+
+    function addSupermarket(address supermarket) public onlyAuthorizedAgents {
+        require(!_addressExists(supermarket, _supermarketsAddresses), "Supermarket already exists");
+        _supermarketsAddresses.push(supermarket);
+    }
+
+    function removeSupermarket(address supermarket) public onlyAuthorizedAgents {
+        _removeAddress(supermarket, _supermarketsAddresses);
+        delete _balancesSupermarkets[supermarket];
+    }
+
+    function getNPOBalances() view public onlyAuthorizedAgents returns (address[] memory, uint256[] memory) {
+        uint256 length = _npoAddresses.length;
+        address[] memory addresses = new address[](length);
+        uint256[] memory balances = new uint256[](length);
+
+        for (uint256 i = 0; i < length; i++) {
+            addresses[i] = _npoAddresses[i];
+            balances[i] = _balancesNPOs[addresses[i]];
+        }
+
+        return (addresses, balances);
+    }
+
+    function getSupermarketBalances() view public onlyAuthorizedAgents returns (address[] memory, uint256[] memory) {
+        uint256 length = _supermarketsAddresses.length;
+        address[] memory addresses = new address[](length);
+        uint256[] memory balances = new uint256[](length);
+
+        for (uint256 i = 0; i < length; i++) {
+            addresses[i] = _supermarketsAddresses[i];
+            balances[i] = _balancesSupermarkets[addresses[i]];
+        }
+
+        return (addresses, balances);
+    }
+
+    function _addressExists(address addr, address[] storage addrList) internal view returns (bool) {
+        for (uint256 i = 0; i < addrList.length; i++) {
+            if (addrList[i] == addr) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function _removeAddress(address addr, address[] storage addrList) internal {
+        for (uint256 i = 0; i < addrList.length; i++) {
+            if (addrList[i] == addr) {
+                addrList[i] = addrList[addrList.length - 1];
+                addrList.pop();
+                break;
+            }
+        }
     }
 }
